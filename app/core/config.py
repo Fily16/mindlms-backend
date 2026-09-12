@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # local MODEL_PATH/roberta-finetuned. En despliegue se define esta
     # variable porque el modelo (476 MB) no cabe en GitHub.
     ROBERTA_MODEL_ID: str = ""
+
+    # Lanzar una detección automática en cada arranque. Se desactiva en
+    # hostings que cobran por segundo y apagan el contenedor al quedar
+    # inactivo: allí cada arranque en frío relanzaría la detección.
+    AUTO_DETECT_ON_STARTUP: bool = True
     MAX_TEXT_LENGTH: int = 512
     RISK_THRESHOLD_HIGH: float = 0.75
     RISK_THRESHOLD_MEDIUM: float = 0.45

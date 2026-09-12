@@ -51,6 +51,13 @@ async def _auto_tasks_on_startup():
     #   modo QUICK. Los foros/chats/tareas ya están en el checkpoint;
     #   el auto-scan de mensajes directos atrapa lo nuevo. Reanudar
     #   con FULL sólo tiene sentido si nunca se completó ni un ciclo.
+    if not settings.AUTO_DETECT_ON_STARTUP:
+        # En un hosting que cobra por segundo y apaga el contenedor cuando
+        # nadie usa el sistema, cada arranque en frío relanzaría esta
+        # detección y consumiría saldo sin que nadie lo pida.
+        logger.info("Detección automática al arrancar desactivada por configuración")
+        return
+
     need_full = detection_checkpoint.processed_count == 0
     logger.info(
         f"Iniciando detección automática "
