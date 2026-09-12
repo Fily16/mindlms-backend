@@ -1,0 +1,49 @@
+# === Backend API ===
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# === Authentication ===
+python-jose[cryptography]==3.4.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.1
+
+# === Database ===
+motor==3.6.0               # MongoDB async driver
+pymongo==4.10.1
+sqlalchemy==2.0.36
+asyncpg==0.30.0            # PostgreSQL async driver
+alembic==1.14.1            # DB migrations
+
+# === Cache ===
+redis[asyncio]==5.2.1
+
+# === ML / Deep Learning ===
+torch==2.5.1
+transformers==4.47.1
+scikit-learn==1.6.0
+imbalanced-learn==0.12.4   # SMOTE
+joblib==1.4.2
+
+# === NLP ===
+spacy==3.8.3
+# Modelo de español que carga text_processor.py al importarse.
+# Se instala como wheel para que un despliegue limpio no dependa de
+# "python -m spacy download".
+es-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl
+
+# === Data Processing ===
+pandas==2.2.3
+numpy==2.2.1
+
+# === Testing ===
+pytest==8.3.4
+pytest-asyncio==0.25.0
+anyio==4.8.0
+httpx==0.28.1              # Para test client de FastAPI + Moodle client
+
+# === Utilities ===
+python-dotenv==1.0.1
+loguru==0.7.3

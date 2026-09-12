@@ -1,0 +1,226 @@
+// ============================================================
+// MindLMS - Diagrama de Base de Datos
+// Pegar en https://dbdiagram.io/d
+// ============================================================
+
+Project MindLMS {
+  database_type: 'PostgreSQL'
+  Note: 'Sistema de Identificacion de Indicadores de Ansiedad en Estudiantes Universitarios mediante NLP y ML'
+}
+
+// === USUARIOS DEL SISTEMA ===
+Table users {
+  id varchar [pk]
+  email varchar [unique, not null]
+  hashed_password varchar [not null]
+  full_name varchar [not null]
+  role user_role [not null, default: 'viewer', note: 'psicologo | admin | viewer']
+  is_active boolean [not null, default: true]
+  created_at timestamp [not null, default: `now()`]
+  updated_at timestamp [not null, default: `now()`]
+}
+
+// === ESTUDIANTES (sincronizados desde Moodle) ===
+Table students {
+  id varchar [pk]
+  moodle_user_id integer [unique, not null, note: 'ID del estudiante en Moodle']
+  anonymous_id varchar [unique, not null, note: 'ID anonimizado (Ley 29733)']
+  first_name varchar
+  last_name varchar
+  email varchar
+  current_risk_level risk_level [default: 'bajo']
+  avg_risk_score float [default: 0.0]
+  total_analyses integer [default: 0]
+  total_alerts integer [default: 0]
+  last_analyzed_at timestamp
+  is_active boolean [not null, default: true]
+  synced_at timestamp [not null, default: `now()`]
+  created_at timestamp [not null, default: `now()`]
+  updated_at timestamp [not null, default: `now()`]
+}
+
+// === CURSOS (sincronizados desde Moodle) ===
+Table courses {
+  id varchar [pk]
+  moodle_course_id integer [unique, not null]
+  short_name varchar [not null]
+  full_name varchar [not null]
+  category varchar
+  is_monitored boolean [not null, default: true]
+  synced_at timestamp [not null, default: `now()`]
+  created_at timestamp [not null, default: `now()`]
+}
+
+// === MATRICULAS (Estudiante <-> Curso) ===
+Table student_courses {
+  id varchar [pk]
+  student_id varchar [not null, ref: > students.id]
+  course_id varchar [not null, ref: > courses.id]
+  enrolled_at timestamp [not null, default: `now()`]
+
+  indexes {
+    (student_id, course_id) [unique]
+  }
+}
+
+// === ALERTAS DE RIESGO ===
+Table alerts {
+  id varchar [pk]
+  student_id varchar [not null, ref: > students.id]
+  student_name varchar
+  course_id varchar [ref: > courses.id]
+  course_name varchar
+  risk_level risk_level [not null]
+  risk_score float [not null]
+  confidence float [not null]
+  text_fragment text [not null]
+  source varchar [not null, note: 'foro | chat | tarea']
+  status alert_status [not null, default: 'pendiente']
+  assigned_to varchar [ref: > users.id]
+  created_at timestamp [not null, default: `now()`]
+  updated_at timestamp [not null, default: `now()`]
+}
+
+// === NOTAS DEL PSICOLOGO SOBRE ALERTAS ===
+Table alert_notes {
+  id varchar [pk]
+  alert_id varchar [not null, ref: > alerts.id]
+  author_id varchar [not null, ref: > users.id]
+  author_name varchar [not null]
+  content text [not null]
+  created_at timestamp [not null, default: `now()`]
+}
+
+// === SESIONES DE ANALISIS NLP/ML ===
+Table analysis_sessions {
+  id varchar [pk]
+  student_id varchar [not null, ref: > students.id]
+  course_id varchar [ref: > courses.id]
+  source_type text_source [not null, note: 'foro | chat | tarea | cuestionario']
+  original_hash varchar [unique, not null, note: 'SHA-256 para evitar duplicados']
+  cleaned_text text [not null]
+  risk_level risk_level [not null]
+  risk_score float [not null]
+  confidence float [not null]
+  model_version varchar [not null]
+  processing_time_ms integer
+  alert_id varchar [ref: > alerts.id]
+  analyzed_at timestamp [not null, default: `now()`]
+}
+
+// === MARCADORES LINGUISTICOS POR SESION ===
+Table linguistic_markers {
+  id varchar [pk]
+  analysis_session_id varchar [not null, ref: > analysis_sessions.id]
+  first_person_pronouns float [not null, default: 0.0, note: 'Trifu et al. (2024)']
+  negations float [not null, default: 0.0, note: 'Yang et al. (2023)']
+  negative_emotions float [not null, default: 0.0, note: 'Trifu et al. (2024)']
+  isolation_references float [not null, default: 0.0, note: 'Trifu et al. (2024)']
+  hopelessness float [not null, default: 0.0, note: 'Yang et al. (2023)']
+  high_risk_patterns float [not null, default: 0.0, note: 'Malgaroli et al. (2024)']
+  past_tense float [not null, default: 0.0]
+}
+
+// === FRAGMENTOS MARCADOS ===
+Table flagged_fragments {
+  id varchar [pk]
+  analysis_session_id varchar [not null, ref: > analysis_sessions.id]
+  fragment_text text [not null]
+  marker_type varchar [not null, note: 'Tipo de marcador que activo la alerta']
+  position_start integer
+  position_end integer
+}
+
+// === INTERVENCIONES DEL PSICOLOGO ===
+Table interventions {
+  id varchar [pk]
+  alert_id varchar [not null, ref: > alerts.id]
+  student_id varchar [not null, ref: > students.id]
+  psychologist_id varchar [not null, ref: > users.id]
+  type intervention_type [not null, note: 'seguimiento | entrevista | derivacion | contacto_tutor | instrumento']
+  status intervention_status [not null, default: 'programada']
+  description text
+  scheduled_at timestamp
+  completed_at timestamp
+  outcome_notes text
+  created_at timestamp [not null, default: `now()`]
+  updated_at timestamp [not null, default: `now()`]
+}
+
+// === LOG DE AUDITORIA (Ley 29733) ===
+Table audit_log {
+  id varchar [pk]
+  user_id varchar [ref: > users.id]
+  action audit_action [not null]
+  entity_type varchar
+  entity_id varchar
+  details jsonb
+  ip_address varchar
+  created_at timestamp [not null, default: `now()`]
+}
+
+// === CONFIGURACION DEL SISTEMA ===
+Table system_config {
+  key varchar [pk]
+  value jsonb [not null]
+  description varchar
+  updated_by varchar [ref: > users.id]
+  updated_at timestamp [not null, default: `now()`]
+}
+
+// === ENUMS ===
+Enum user_role {
+  psicologo
+  admin
+  viewer
+}
+
+Enum risk_level {
+  bajo
+  medio
+  alto
+}
+
+Enum alert_status {
+  pendiente
+  revisada
+  en_seguimiento
+  resuelta
+}
+
+Enum text_source {
+  foro
+  chat
+  tarea
+  cuestionario
+}
+
+Enum intervention_type {
+  seguimiento_periodico
+  entrevista_presencial
+  derivacion_especialista
+  contacto_tutor
+  aplicacion_instrumento
+}
+
+Enum intervention_status {
+  programada
+  en_curso
+  completada
+  cancelada
+}
+
+Enum audit_action {
+  login
+  logout
+  alert_viewed
+  alert_status_changed
+  alert_assigned
+  note_added
+  intervention_created
+  intervention_updated
+  analysis_executed
+  student_profile_viewed
+  report_generated
+  data_exported
+}
