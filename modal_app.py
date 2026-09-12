@@ -13,9 +13,14 @@ Primer despliegue:
 
     pip install modal
     python -m modal setup
+
+    modal volume create mindlms-models
+    modal volume put mindlms-models \\
+        ml/data/models/roberta-finetuned /roberta-finetuned
+
     modal secret create mindlms \\
         POSTGRES_URL=... MONGODB_URL=... SECRET_KEY=... \\
-        ROBERTA_MODEL_ID=Fily16/mindlms-roberta-ansiedad \\
+        MODEL_PATH=/models \\
         MOODLE_URL=... MOODLE_TOKEN=... \\
         CORS_ORIGINS='["https://mindlms-frontend.vercel.app"]' \\
         DEBUG=false AUTO_TRAIN_ON_STARTUP=false \\
@@ -30,7 +35,11 @@ La detección sigue disponible bajo demanda desde el panel.
 
 import modal
 
-MODEL_ID = "Fily16/mindlms-roberta-ansiedad"
+# El RoBERTa fine-tuned (480 MB) vive en un volumen de Modal, subido con:
+#   modal volume put mindlms-models ml/data/models/roberta-finetuned /roberta-finetuned
+# Así no hace falta publicarlo en ningún sitio ni meterlo en la imagen, y
+# se puede reemplazar por un modelo reentrenado sin volver a construir.
+models = modal.Volume.from_name("mindlms-models")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -38,15 +47,6 @@ image = (
     # plataforma; sin estas herramientas el build falla.
     .apt_install("build-essential")
     .pip_install_from_requirements("requirements.txt")
-    # El modelo se descarga AQUÍ, en la construcción de la imagen, y queda
-    # cacheado en la capa. Si se dejara para el arranque, cada cold start
-    # se traería 476 MB desde Hugging Face antes de responder.
-    .run_commands(
-        "python -c \""
-        "from transformers import AutoTokenizer, AutoModelForSequenceClassification; "
-        f"AutoTokenizer.from_pretrained('{MODEL_ID}'); "
-        f"AutoModelForSequenceClassification.from_pretrained('{MODEL_ID}')\""
-    )
     .add_local_dir("app", remote_path="/root/app")
 )
 
@@ -58,6 +58,9 @@ app = modal.App("mindlms-api")
     cpu=2,
     memory=4096,
     secrets=[modal.Secret.from_name("mindlms")],
+    # MODEL_PATH=/models hace que el clasificador busque el RoBERTa en
+    # /models/roberta-finetuned, que es donde lo monta este volumen.
+    volumes={"/models": models},
     # Un contenedor atiende todas las peticiones: el bus de eventos SSE y
     # el estado de las tareas ML viven en memoria del proceso, así que con
     # varios contenedores un cliente conectado no vería los eventos que
