@@ -46,6 +46,10 @@ image = (
     # Algunas ruedas (bcrypt, asyncpg) compilan si no hay binario para la
     # plataforma; sin estas herramientas el build falla.
     .apt_install("build-essential")
+    # torch CPU explícito: en Linux, `pip install torch` arrastra por
+    # defecto los paquetes de CUDA (varios GB) que aquí no sirven de nada
+    # porque no hay GPU. Instalarlo antes deja satisfecho el requirement.
+    .pip_install("torch==2.6.0", index_url="https://download.pytorch.org/whl/cpu")
     .pip_install_from_requirements("requirements.txt")
     .add_local_dir("app", remote_path="/root/app")
 )

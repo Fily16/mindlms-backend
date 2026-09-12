@@ -4,6 +4,9 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 pydantic==2.10.4
 pydantic-settings==2.7.1
+# Lo exige pydantic para el tipo EmailStr de app/schemas/auth.py. Sin él,
+# la app ni siquiera importa: falla al construir el esquema del login.
+email-validator==2.3.0
 
 # === Authentication ===
 python-jose[cryptography]==3.4.0
@@ -11,8 +14,12 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.2.1
 
 # === Database ===
-motor==3.6.0               # MongoDB async driver
-pymongo==4.10.1
+# Las versiones declaradas antes (motor 3.6.0 + pymongo 4.10.1) son
+# incompatibles entre sí: motor 3.6.0 exige pymongo<4.10. El conflicto no
+# se veía en local porque el entorno tenía instaladas estas otras, que son
+# las realmente probadas.
+motor==3.7.1               # MongoDB async driver
+pymongo==4.16.0
 sqlalchemy==2.0.36
 asyncpg==0.30.0            # PostgreSQL async driver
 alembic==1.14.1            # DB migrations
@@ -21,8 +28,12 @@ alembic==1.14.1            # DB migrations
 redis[asyncio]==5.2.1
 
 # === ML / Deep Learning ===
-torch==2.5.1
-transformers==4.47.1
+# Versiones con las que se entrenó y se carga el RoBERTa del proyecto.
+# Las declaradas antes (torch 2.5.1 / transformers 4.47.1) no coincidían
+# con el entorno real, y transformers 4 frente a 5 es un cambio de versión
+# mayor: desplegar con la declarada arriesgaba que el modelo no cargara.
+torch==2.6.0
+transformers==5.5.4
 scikit-learn==1.6.0
 imbalanced-learn==0.12.4   # SMOTE
 joblib==1.4.2
