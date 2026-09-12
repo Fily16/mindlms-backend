@@ -60,3 +60,26 @@ async def get_student_history(
     """Historial completo de análisis y alertas de un estudiante."""
     service = AnalysisService(session)
     return await service.get_student_history(student_id)
+
+
+@router.get("/{student_id}/reports")
+async def get_student_reports(
+    student_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Expediente del estudiante: informes de evaluación registrados."""
+    from app.services.alert_service import AlertService
+
+    service = AlertService(session)
+    reports = await service.get_reports_by_student(student_id)
+    return [
+        {
+            "id": r.id,
+            "autor": r.author_name,
+            "contenido": r.content,
+            "derivacion": r.referral,
+            "comunicado": r.communicated_at is not None,
+            "fecha": r.created_at.isoformat(),
+        }
+        for r in reports
+    ]

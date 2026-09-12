@@ -85,6 +85,85 @@ class AlertService:
         await self.session.refresh(alert)
         return alert
 
+    async def validate_risk(
+        self,
+        alert_id: str,
+        decision: str,
+        nivel_ajustado: str | None,
+        motivo: str | None,
+        autor: str,
+    ):
+        """Guarda la decisión del psicólogo sobre el nivel del modelo.
+
+        Devuelve la alerta, None si no existe, o la cadena "invalid" cuando
+        se pide ajustar sin decir a qué nivel ni por qué.
+        """
+        alert = await self.get_alert_by_id(alert_id)
+        if not alert:
+            return None
+
+        if decision == "ajustado":
+            if not nivel_ajustado or not (motivo or "").strip():
+                return "invalid"
+            alert.risk_level_adjusted = RiskLevelDB(nivel_ajustado)
+            alert.risk_adjust_reason = motivo.strip()
+        else:
+            decision = "confirmado"
+            alert.risk_level_adjusted = None
+            alert.risk_adjust_reason = None
+
+        alert.risk_validated = decision
+        alert.validated_by = autor
+        alert.validated_at = _utcnow_naive()
+        alert.updated_at = _utcnow_naive()
+        await self.session.commit()
+        await self.session.refresh(alert)
+        return alert
+
+    async def create_report(
+        self,
+        alert_id: str,
+        contenido: str,
+        derivacion: str | None,
+        comunicado: bool,
+        autor_id: str,
+        autor_nombre: str,
+    ):
+        """Registra un informe de evaluación en el expediente del estudiante."""
+        from app.models.alert import EvaluationReport
+
+        alert = await self.get_alert_by_id(alert_id)
+        if not alert:
+            return None
+
+        report = EvaluationReport(
+            id=str(uuid.uuid4()),
+            student_id=alert.student_id,
+            student_name=alert.student_name,
+            alert_id=alert.id,
+            author_id=autor_id,
+            author_name=autor_nombre,
+            content=contenido.strip(),
+            referral=(derivacion or "").strip() or None,
+            communicated_at=_utcnow_naive() if comunicado else None,
+            created_at=_utcnow_naive(),
+        )
+        self.session.add(report)
+        await self.session.commit()
+        await self.session.refresh(report)
+        return report
+
+    async def get_reports_by_student(self, student_id: str) -> list:
+        """Expediente del estudiante: sus informes, del más reciente al más antiguo."""
+        from app.models.alert import EvaluationReport
+
+        result = await self.session.execute(
+            select(EvaluationReport)
+            .where(EvaluationReport.student_id == student_id)
+            .order_by(desc(EvaluationReport.created_at))
+        )
+        return list(result.scalars().all())
+
     async def add_note(
         self, alert_id: str, author_id: str, author_name: str, content: str
     ) -> AlertNote:

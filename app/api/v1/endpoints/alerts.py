@@ -35,6 +35,22 @@ class MessageInput(BaseModel):
     template: str | None = None  # "meeting" para citar, None = mensaje libre
 
 
+class RiskValidationInput(BaseModel):
+    """Decisión del psicólogo sobre el nivel que calculó el modelo."""
+
+    decision: str  # "confirmado" | "ajustado"
+    nivel_ajustado: str | None = None  # obligatorio si decision="ajustado"
+    motivo: str | None = None
+
+
+class ReportInput(BaseModel):
+    """Informe de evaluación psicológica del estudiante."""
+
+    contenido: str
+    derivacion: str | None = None
+    comunicado_al_estudiante: bool = False
+
+
 @router.get("/", response_model=List[AlertOut])
 async def get_alerts(
     risk_level: Optional[RiskLevel] = None,
@@ -214,4 +230,71 @@ async def send_message_to_student(
         "template": payload.template,
         "moodle_response": result,
         "note_id": note.id,
+    }
+
+
+@router.patch("/{alert_id}/risk-validation")
+async def validate_alert_risk(
+    alert_id: str,
+    payload: RiskValidationInput,
+    session: AsyncSession = Depends(get_session),
+):
+    """Registra si el psicólogo confirma o corrige el nivel que calculó el modelo.
+
+    El campo `risk_level` no se toca nunca: guarda lo que dijo RoBERTa. La
+    corrección va aparte, de modo que después se pueda medir cuántas veces
+    el criterio clínico coincidió con el automático.
+    """
+    service = AlertService(session)
+    alert = await service.validate_risk(
+        alert_id=alert_id,
+        decision=payload.decision,
+        nivel_ajustado=payload.nivel_ajustado,
+        motivo=payload.motivo,
+        autor="psicologo",
+    )
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alerta no encontrada")
+    if alert == "invalid":
+        raise HTTPException(
+            status_code=422,
+            detail="Para ajustar el riesgo hay que indicar el nuevo nivel y el motivo",
+        )
+    return {
+        "alert_id": alert.id,
+        "riesgo_del_modelo": alert.risk_level.value,
+        "decision": alert.risk_validated,
+        "nivel_final": (
+            alert.risk_level_adjusted.value
+            if alert.risk_level_adjusted
+            else alert.risk_level.value
+        ),
+        "motivo": alert.risk_adjust_reason,
+    }
+
+
+@router.post("/{alert_id}/report")
+async def create_evaluation_report(
+    alert_id: str,
+    payload: ReportInput,
+    session: AsyncSession = Depends(get_session),
+):
+    """Registra el informe de evaluación psicológica en el expediente."""
+    service = AlertService(session)
+    report = await service.create_report(
+        alert_id=alert_id,
+        contenido=payload.contenido,
+        derivacion=payload.derivacion,
+        comunicado=payload.comunicado_al_estudiante,
+        autor_id="psicologo",
+        autor_nombre="Psicólogo institucional",
+    )
+    if not report:
+        raise HTTPException(status_code=404, detail="Alerta no encontrada")
+    return {
+        "id": report.id,
+        "student_id": report.student_id,
+        "creado": report.created_at.isoformat(),
+        "derivacion": bool(report.referral),
+        "comunicado": report.communicated_at is not None,
     }

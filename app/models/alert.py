@@ -39,6 +39,41 @@ class Alert(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # --- Validación del psicólogo sobre la clasificación automática ---
+    # El nivel lo calcula el modelo, pero la decisión clínica es del
+    # profesional: puede confirmarlo o corregirlo dejando el motivo.
+    # risk_level conserva SIEMPRE lo que dijo el modelo, para poder
+    # comparar después el criterio humano contra el automático.
+    risk_validated = Column(String, nullable=True)  # "confirmado" | "ajustado"
+    risk_level_adjusted = Column(SAEnum(RiskLevelDB), nullable=True)
+    risk_adjust_reason = Column(Text, nullable=True)
+    validated_by = Column(String, nullable=True)
+    validated_at = Column(DateTime, nullable=True)
+
+
+class EvaluationReport(Base):
+    """Informe de evaluación psicológica: el expediente del estudiante.
+
+    Se liga al estudiante y no solo a una alerta, para que el historial se
+    lea completo aunque las alertas que lo originaron queden resueltas.
+    """
+
+    __tablename__ = "evaluation_reports"
+
+    id = Column(String, primary_key=True)
+    student_id = Column(String, nullable=False, index=True)
+    student_name = Column(String, nullable=True)
+    alert_id = Column(String, ForeignKey("alerts.id"), nullable=True, index=True)
+    author_id = Column(String, nullable=False)
+    author_name = Column(String, nullable=False)
+    # Evidencia y conclusión de la evaluación.
+    content = Column(Text, nullable=False)
+    # Derivación a un especialista externo, cuando el caso lo amerita.
+    referral = Column(Text, nullable=True)
+    # Marca de que se comunicaron los resultados al estudiante.
+    communicated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
 
 class AlertNote(Base):
     __tablename__ = "alert_notes"
