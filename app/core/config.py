@@ -15,6 +15,10 @@ class Settings(BaseSettings):
 
     # === CORS ===
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    # Orígenes permitidos por expresión regular, además de la lista de
+    # arriba. Sirve para hostings cuyo subdominio cambia en cada preview,
+    # p. ej. r"https://.*\.vercel\.app".
+    CORS_ORIGIN_REGEX: str = ""
 
     # === MongoDB ===
     MONGODB_URL: str = "mongodb://localhost:27017"
