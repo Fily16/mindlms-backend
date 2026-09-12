@@ -1,0 +1,35 @@
+; Servicio systemd para la API de MindLMS.
+; Instalación en la VM:
+;   sudo cp deploy/mindlms-api.service /etc/systemd/system/
+;   sudo systemctl daemon-reload
+;   sudo systemctl enable --now mindlms-api
+;   sudo systemctl status mindlms-api
+;   journalctl -u mindlms-api -f      # ver logs en vivo
+
+[Unit]
+Description=MindLMS API (FastAPI + RoBERTa)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/mindlms-backend
+EnvironmentFile=/home/ubuntu/mindlms-backend/.env
+
+; Un solo worker a propósito: el bus de eventos SSE, el estado de las
+; tareas ML y el checkpoint de detección son singletons en memoria de
+; proceso. Con varios workers, un cliente SSE conectado a uno no recibiría
+; los eventos publicados por otro.
+ExecStart=/home/ubuntu/mindlms-backend/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 --workers 1
+
+; El primer arranque descarga RoBERTa desde Hugging Face (~476 MB) y puede
+; tardar varios minutos; después queda en la caché de ~/.cache/huggingface.
+TimeoutStartSec=600
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
