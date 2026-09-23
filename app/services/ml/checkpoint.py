@@ -14,9 +14,11 @@ de la corrida. Cumple dos funciones:
    donde se quedó (los hashes ya registrados se saltan).
 """
 
+import html
 import json
 import hashlib
 import os
+import re
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Optional
@@ -32,6 +34,15 @@ def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def panel_message_key(text: str) -> str:
+    """Hash tolerante al formato: Moodle devuelve el mensaje enviado con
+    HTML, saltos y entidades distintos al texto original del panel."""
+    t = html.unescape(re.sub(r"<[^>]+>", " ", text or ""))
+    t = re.sub(r"^\s*\[@\w+\]\s*", "", t)
+    t = re.sub(r"[\W_]+", " ", t.lower())
+    return hashlib.sha256(" ".join(t.split()).encode()).hexdigest()
+
+
 class DetectionCheckpoint:
     """Singleton: estado persistente de la detección."""
 
@@ -43,6 +54,11 @@ class DetectionCheckpoint:
             cls._instance._hashes = set()
             cls._instance._state = "idle"
             cls._instance._last_full_scan_ts = 0
+            # Mensajes que el psicólogo envió desde el panel. En las
+            # conversaciones del admin se leen igual que un texto del
+            # estudiante (así se sembraron los datos), así que hay que
+            # reconocerlos para no analizarlos como si él los escribiera.
+            cls._instance._panel_messages = set()
             cls._instance._load()
         return cls._instance
 
@@ -57,6 +73,7 @@ class DetectionCheckpoint:
                 # Sirve para saltarnos contenedores de Moodle no
                 # modificados desde entonces — sin hacer la llamada HTTP.
                 self._last_full_scan_ts = int(data.get("last_full_scan_ts", 0))
+                self._panel_messages = set(data.get("panel_messages", []))
                 logger.info(
                     f"Checkpoint cargado: {len(self._hashes)} textos "
                     f"procesados, estado='{self._state}', "
@@ -79,6 +96,7 @@ class DetectionCheckpoint:
                         "updated_at": datetime.now(UTC).isoformat(),
                         "last_full_scan_ts": self._last_full_scan_ts,
                         "hashes": sorted(self._hashes),
+                        "panel_messages": sorted(self._panel_messages),
                     },
                     f,
                 )
@@ -111,6 +129,15 @@ class DetectionCheckpoint:
 
     def add_hash(self, h: str):
         self._hashes.add(h)
+
+    def add_panel_message(self, text: str):
+        """Registra un mensaje del panel ANTES de enviarlo: el aviso de
+        Moodle puede disparar la detección antes de que el envío termine."""
+        self._panel_messages.add(panel_message_key(text))
+        self._save()
+
+    def is_panel_message(self, text: str) -> bool:
+        return panel_message_key(text) in self._panel_messages
 
     def set_state(self, state: str):
         self._state = state

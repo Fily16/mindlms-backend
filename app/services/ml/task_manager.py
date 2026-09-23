@@ -271,8 +271,10 @@ class MLTaskManager:
                 if sid == admin_user_id:
                     continue
 
-                # ── Checkpoint: ya procesado en una corrida anterior ──
-                if detection_checkpoint.has(entry["text"]):
+                # ── Checkpoint: ya procesado en una corrida anterior, o
+                #    es un mensaje que el psicólogo envió desde el panel ──
+                if (detection_checkpoint.has(entry["text"])
+                        or detection_checkpoint.is_panel_message(entry["text"])):
                     counters["skipped"] = counters.get("skipped", 0) + 1
                     continue
 

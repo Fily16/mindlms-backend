@@ -1,3 +1,5 @@
+import unicodedata
+
 from fastapi import APIRouter, Depends, Query, HTTPException, status, Body
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -176,6 +178,12 @@ _MEETING_TEMPLATE = (
 )
 
 
+def _nombre_normalizado(nombre: str) -> str:
+    """Sin tildes, mayúsculas ni espacios de más, para comparar nombres."""
+    sin_tildes = unicodedata.normalize("NFKD", nombre or "").encode("ascii", "ignore").decode()
+    return " ".join(sin_tildes.lower().split())
+
+
 @router.post("/{alert_id}/send-message")
 async def send_message_to_student(
     alert_id: str,
@@ -211,6 +219,33 @@ async def send_message_to_student(
         )
 
     client = MoodleClient()
+
+    # El id de la alerta debe ser el de ese estudiante en ESTE Moodle. Las
+    # alertas creadas con otra instalación traen ids que aquí pertenecen a
+    # otra persona, y el mensaje le llegaría a quien no corresponde.
+    if alert.student_name:
+        try:
+            usuarios = await client.get_user_by_field("id", str(student_id_int))
+        except MoodleAPIError as e:
+            raise HTTPException(status_code=502, detail=f"Moodle: {e.message}")
+        en_moodle = usuarios[0].get("fullname", "") if usuarios else ""
+        if _nombre_normalizado(en_moodle) != _nombre_normalizado(alert.student_name):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No se envió: en Moodle el id {student_id_int} es "
+                    f"{en_moodle or 'un usuario inexistente'}, no "
+                    f"{alert.student_name}. Esta alerta viene de otra "
+                    f"instalación de Moodle."
+                ),
+            )
+
+    # Antes de enviar: el aviso de Moodle puede lanzar la detección antes
+    # de que esto termine, y el mensaje no debe analizarse como si lo
+    # hubiera escrito el estudiante.
+    from app.services.ml.checkpoint import detection_checkpoint
+    detection_checkpoint.add_panel_message(text)
+
     try:
         result = await client.send_instant_message(student_id_int, text)
     except MoodleAPIError as e:
