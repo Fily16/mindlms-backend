@@ -79,6 +79,9 @@ app = modal.App("mindlms-api")
         modal.Secret.from_name("mindlms"),
         # Conexion recuperada; conserva sin cambios Moodle, JWT y demas secretos.
         modal.Secret.from_name("mindlms-database-recovery"),
+        # MOODLE_WEBHOOK_SECRET: el mismo que MINDLMS_WEBHOOK_SECRET en el
+        # servicio Moodle de Railway; con él se firman los avisos del plugin.
+        modal.Secret.from_name("mindlms-webhook"),
     ],
     # MODEL_PATH=/models hace que el clasificador busque el RoBERTa en
     # /models/roberta-finetuned, que es donde lo monta este volumen.

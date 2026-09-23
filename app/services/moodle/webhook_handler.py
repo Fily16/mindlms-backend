@@ -4,9 +4,9 @@ Procesa eventos en tiempo real: nuevos posts en foros, mensajes de chat,
 entregas de tareas. Moodle envía estos eventos si se configura un
 "Event observer" o un plugin de webhook.
 
-Configuración en Moodle:
-  - Admin > Plugins > Event monitoring > Add rule
-  - O usar plugin 'local_webhooks' para enviar POST a nuestro endpoint
+Configuración en Moodle: el plugin propio local_mindlms (en el repo
+mindlms-backend, deploy/moodle-railway/local_mindlms) observa estos
+eventos y envía un POST firmado con HMAC a /api/v1/moodle/webhook.
 """
 
 import hashlib
@@ -22,6 +22,7 @@ class MoodleWebhookHandler:
 
     # Eventos que nos interesan para análisis de texto
     SUPPORTED_EVENTS = {
+        "\\mod_forum\\event\\discussion_created",
         "\\mod_forum\\event\\post_created",
         "\\mod_forum\\event\\post_updated",
         "\\mod_chat\\event\\message_sent",

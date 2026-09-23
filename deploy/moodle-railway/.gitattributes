@@ -1,0 +1,3 @@
+# Todo se ejecuta dentro de un contenedor Linux: con CRLF (lo que pone git
+# en Windows) bash falla en la primera línea del entrypoint.
+* text=auto eol=lf

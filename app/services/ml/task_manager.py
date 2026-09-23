@@ -60,6 +60,9 @@ class MLTaskManager:
             cls._instance._training = TaskStatus()
             cls._instance._detection = TaskStatus()
             cls._instance._current_process: Optional[asyncio.subprocess.Process] = None
+            # Detección pedida por un aviso de Moodle mientras otra corría:
+            # None = nada pendiente; True/False = el modo quick pendiente.
+            cls._instance._pending_quick: Optional[bool] = None
         return cls._instance
 
     def get_status(self, task_type: TaskType) -> TaskStatus:
@@ -105,7 +108,35 @@ class MLTaskManager:
             started_at=datetime.now(UTC).isoformat(),
         )
 
-        asyncio.create_task(self._run_detection_pipeline(quick=quick))
+        asyncio.create_task(self._run_detection_and_pending(quick=quick))
+
+    async def request_detection(self, quick: bool = False) -> str:
+        """
+        Pide una detección desde un aviso de Moodle (webhook).
+
+        Si no hay ninguna corriendo, arranca ya. Si hay una en curso, deja
+        otra pendiente para cuando termine: la corrida actual pudo leer
+        Moodle antes de que existiera el texto que motivó el aviso. Varios
+        avisos seguidos se agrupan en UNA sola corrida pendiente, y basta
+        con que uno pida modo completo para que la pendiente sea completa.
+        """
+        if not self.is_busy(TaskType.DETECTION):
+            await self.start_detection(quick=quick)
+            return "started"
+        if self._pending_quick is None:
+            self._pending_quick = quick
+        else:
+            self._pending_quick = self._pending_quick and quick
+        return "queued"
+
+    async def _run_detection_and_pending(self, quick: bool):
+        await self._run_detection_pipeline(quick=quick)
+        pending, self._pending_quick = self._pending_quick, None
+        if pending is not None:
+            try:
+                await self.start_detection(quick=pending)
+            except RuntimeError:
+                pass  # otra corrida arrancó en medio y ya leerá lo nuevo
 
     async def _run_training_pipeline(self, model_type: str):
         """Ejecuta el pipeline completo: download → preprocess → train."""
