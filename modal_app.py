@@ -115,3 +115,49 @@ def fastapi_app():
     from app.main import app as mindlms
 
     return mindlms
+
+
+# ---------------------------------------------------------------------------
+# Robot que mantiene activa la base de datos de Aiven.
+#
+# El plan gratuito de Aiven apaga el servicio tras un periodo de inactividad
+# (su documentación no dice cuánto; avisa por correo antes). Como el backend
+# ya no queda encendido 24/7, si nadie usa el panel en días la base podría
+# apagarse. Este robot hace una consulta mínima cada 2 horas.
+#
+# Es deliberadamente liviano: imagen aparte con solo SQLAlchemy + asyncpg
+# (no carga RoBERTa ni la app) y el mínimo de CPU/RAM, así que cada
+# ejecución dura segundos y cuesta una fracción de centavo.
+# NO se usa para mantener despierto el backend: eso costaría lo mismo que
+# dejarlo encendido 24/7 (~$3/día), que es justo lo que se quiso evitar.
+# ---------------------------------------------------------------------------
+imagen_robot = modal.Image.debian_slim(python_version="3.11").pip_install(
+    "sqlalchemy==2.0.36", "asyncpg==0.30.0"
+)
+
+
+@app.function(
+    image=imagen_robot,
+    secrets=[modal.Secret.from_name("mindlms-database-recovery")],
+    schedule=modal.Period(hours=2),
+    cpu=0.125,
+    memory=256,
+    timeout=60,
+)
+async def mantener_aiven_activo():
+    import os
+    import time
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    # Misma URL y mismo driver que usa el backend, para que la conexión se
+    # interprete exactamente igual (incluidos los parámetros SSL).
+    engine = create_async_engine(os.environ["MINDLMS_POSTGRES_URL"], pool_pre_ping=True)
+    inicio = time.monotonic()
+    try:
+        async with engine.connect() as conn:
+            alertas = (await conn.execute(text("SELECT count(*) FROM alerts"))).scalar()
+        print(f"Aiven activa: {alertas} alertas, respondió en {time.monotonic() - inicio:.2f} s")
+    finally:
+        await engine.dispose()
