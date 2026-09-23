@@ -30,20 +30,21 @@ Primer despliegue:
 La detección automática se habilita explícitamente en fastapi_app para el
 despliegue actual. No se habilita el entrenamiento automático.
 
-Detección automática "mientras se usa":
-    El contenedor NO queda encendido 24/7 (min_containers=0). Mientras
-    alguien tiene el panel abierto, la conexión en vivo (SSE) lo mantiene
-    encendido y el escaneo corre cada 30 s; al cerrar el panel se apaga a
-    los 5 minutos y deja de gastar. Al volver a abrirlo, la detección de
-    arranque revisa lo que se escribió en Moodle mientras estaba apagado,
-    y el checkpoint en el volumen mindlms-detection-state evita volver a
+Detección por aviso de Moodle (sin escaneo periódico):
+    El plugin local_mindlms del Moodle (deploy/moodle-railway) envía un
+    aviso firmado a /api/v1/moodle/webhook cada vez que un estudiante
+    publica; el aviso enciende el contenedor si estaba apagado y lanza la
+    detección. Sin publicaciones no se consulta Moodle ni se gasta nada.
+    La detección de arranque se mantiene como red de seguridad: al
+    encenderse, revisa lo que se escribió mientras estaba apagado, y el
+    checkpoint en el volumen mindlms-detection-state evita volver a
     analizar lo ya visto.
 
-    Por qué no 24/7: Modal cobra por tiempo encendido (lo mayor entre lo
-    reservado y lo usado), así que 2 núcleos + 4 GB encendidos siempre
-    cuestan ~$3/día y agotan los $30 mensuales en ~10 días, escaneen o no.
-    Además cada escaneo descarga ~6 MB/min del Moodle de Railway aunque no
-    haya nada nuevo, y el tráfico de salida de Railway se cobra por GB.
+    Por qué no 24/7 ni escaneo cada 30 s: Modal cobra por tiempo encendido
+    (lo mayor entre lo reservado y lo usado), así que 2 núcleos + 4 GB
+    encendidos siempre cuestan ~$3/día y agotan los $30 mensuales en ~10
+    días. Además cada escaneo descarga ~3 MB del Moodle de Railway aunque
+    no haya nada nuevo, y el tráfico de salida de Railway se cobra por GB.
 """
 
 import modal
@@ -91,9 +92,9 @@ app = modal.App("mindlms-api")
     # varios contenedores un cliente conectado no vería los eventos que
     # publica el vecino.
     max_containers=1,
-    # Sin contenedor fijo: se enciende cuando alguien usa el panel y el
-    # escaneo automático corre mientras siga encendido. Con 1 quedaría
-    # encendido 24/7 (~$3/día en Modal, ver docstring).
+    # Sin contenedor fijo: se enciende cuando alguien usa el panel o llega
+    # un aviso de Moodle. Con 1 quedaría encendido 24/7 (~$3/día en Modal,
+    # ver docstring).
     min_containers=0,
     # Margen para que una conexión SSE abierta no se corte a mitad.
     timeout=3600,
@@ -110,7 +111,8 @@ def fastapi_app():
     os.environ.update({
         "AUTO_TRAIN_ON_STARTUP": "false",
         "AUTO_DETECT_ON_STARTUP": "true",
-        "AUTO_DETECT_INTERVAL_SECONDS": "30",
+        # 0 = sin escaneo periódico: lo nuevo llega por aviso de Moodle.
+        "AUTO_DETECT_INTERVAL_SECONDS": "0",
         "AUTO_DETECT_QUICK_MODE": "false",
         "AUTO_DETECT_FULL_INTERVAL_SECONDS": "30",
         "DETECTION_PACE_SECONDS": "0",
