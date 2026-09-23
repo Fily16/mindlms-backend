@@ -12,7 +12,9 @@ router = APIRouter()
 @router.get("/")
 async def get_students(
     risk_level: Optional[str] = None,
-    limit: int = Query(50, ge=1, le=200),
+    # Tope alto: la página de estudiantes pide a todos y busca en el
+    # navegador; con 200 dejaba fuera a ~280 de los ~480 con alertas.
+    limit: int = Query(50, ge=1, le=1000),
     session: AsyncSession = Depends(get_session),
 ):
     """Lista perfiles de estudiantes con su nivel de riesgo actual."""
