@@ -16,11 +16,12 @@ from app.db.postgresql import get_session
 from app.services.moodle.sync_service import MoodleSyncService
 from app.services.moodle.webhook_handler import MoodleWebhookHandler
 from app.services.ml.task_manager import MLTaskManager
+from app.core.security import require_dashboard_user
 
 router = APIRouter()
 
 
-@router.get("/courses")
+@router.get("/courses", dependencies=[Depends(require_dashboard_user)])
 async def list_moodle_courses(
     session: AsyncSession = Depends(get_session),
 ):
@@ -33,7 +34,7 @@ async def list_moodle_courses(
         raise HTTPException(status_code=502, detail=f"Error conectando con Moodle: {str(e)}")
 
 
-@router.post("/courses/{course_id}/sync")
+@router.post("/courses/{course_id}/sync", dependencies=[Depends(require_dashboard_user)])
 async def sync_course(
     course_id: int,
     source: Optional[str] = None,

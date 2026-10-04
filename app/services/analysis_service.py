@@ -47,6 +47,7 @@ class AnalysisService:
                     "linguistic_markers": existing["linguistic_markers"],
                     "flagged_fragments": existing["flagged_fragments"],
                     "analyzed_at": existing["analyzed_at"],
+                    "anonymized_text": existing.get("cleaned_text", ""),
                     "cached": True,
                 }
 
@@ -117,6 +118,9 @@ class AnalysisService:
                 "isolation_references": markers.isolation_references,
             },
             "matched_words": matched_words,
+            # Texto ya anonimizado: es lo único que puede salir hacia el
+            # dashboard (SSE / teatro de análisis), nunca el original.
+            "anonymized_text": anonymized,
             "flagged_fragments": prediction.get("flagged_fragments", []),
             "word_count": len(cleaned.split()),
             "char_count": len(cleaned),

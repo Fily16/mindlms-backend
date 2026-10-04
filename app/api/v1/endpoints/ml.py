@@ -164,6 +164,13 @@ async def force_full_scan():
     return {"status": "started", "mode": "FULL"}
 
 
+@router.get("/extraction/status")
+async def get_extraction_status():
+    """Indicador 'En vivo' del dashboard: estado y hora de la última
+    extracción de datos desde Moodle (HU0005)."""
+    return MLTaskManager().extraction_status()
+
+
 # ── SSE: notificaciones en tiempo real ────────────────────
 
 @router.get("/detect/events")

@@ -55,6 +55,7 @@ class TestAuthEndpoints:
 
 
 @pytest.mark.anyio
+@pytest.mark.skip(reason="El endpoint /analysis/analyze-text ya no existe: el análisis corre en la detección (task_manager)")
 class TestAnalysisEndpoints:
     @patch("app.api.v1.endpoints.analysis.AnalysisService")
     async def test_analyze_text(self, mock_analysis_service):
@@ -125,12 +126,18 @@ class TestMoodleEndpoints:
             assert "courses" in data
 
     async def test_webhook_invalid_json(self):
+        import hashlib
+        import hmac
+        from app.core.config import settings
+
+        body = b"not json"
+        firma = hmac.new(settings.MOODLE_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
                 "/api/v1/moodle/webhook",
-                content=b"not json",
-                headers={"Content-Type": "application/json"},
+                content=body,
+                headers={"Content-Type": "application/json", "X-Moodle-Signature": firma},
             )
             assert response.status_code == 400
 
@@ -147,6 +154,8 @@ class TestMoodleEndpoints:
             response = await client.post(
                 "/api/v1/moodle/webhook",
                 json={"eventname": "\\core\\event\\course_viewed"},
+                headers={"X-Moodle-Signature": "firma-validada-por-el-mock"},
             )
-            assert response.status_code == 200
+            # El webhook responde 202 (aceptado) para no hacer esperar a Moodle
+            assert response.status_code == 202
             assert response.json()["status"] == "ignored"

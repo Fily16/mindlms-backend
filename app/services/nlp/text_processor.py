@@ -107,7 +107,7 @@ class TextProcessor:
             "", text
         )
         # Remover caracteres especiales excesivos, conservar puntuación básica
-        text = re.sub(r"[^\w\s.,;:!?¿¡áéíóúñüÁÉÍÓÚÑÜ'-]", "", text)
+        text = re.sub(r"[^\w\s.,;:!?¿¡áéíóúñüÁÉÍÓÚÑÜ'\[\]-]", "", text)
         # Normalizar espacios
         text = re.sub(r"\s+", " ", text).strip()
         return text

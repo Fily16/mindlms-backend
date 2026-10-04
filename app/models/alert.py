@@ -84,3 +84,22 @@ class AlertNote(Base):
     author_name = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AlertStatusChange(Base):
+    """Historial de cambios de estado de una alerta (HU0022).
+
+    Tabla nueva en lugar de columnas nuevas: create_all la crea sola en una
+    base existente, mientras que agregar columnas a `alerts` exigiría una
+    migración manual en el PostgreSQL desplegado.
+    """
+
+    __tablename__ = "alert_status_changes"
+
+    id = Column(String, primary_key=True)
+    alert_id = Column(String, ForeignKey("alerts.id"), nullable=False, index=True)
+    from_status = Column(SAEnum(AlertStatus), nullable=True)
+    to_status = Column(SAEnum(AlertStatus), nullable=False)
+    changed_by = Column(String, nullable=True)
+    changed_by_name = Column(String, nullable=True)
+    changed_at = Column(DateTime, default=datetime.utcnow, index=True)
