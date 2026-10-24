@@ -54,6 +54,7 @@ pytest==8.3.4
 pytest-asyncio==0.25.0
 anyio==4.8.0
 httpx==0.28.1              # Para test client de FastAPI + Moodle client
+aiosqlite==0.22.1          # SQLite en memoria para las pruebas de integración
 
 # === Utilities ===
 python-dotenv==1.0.1
