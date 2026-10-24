@@ -63,12 +63,35 @@ class MLTaskManager:
             # Detección pedida por un aviso de Moodle mientras otra corría:
             # None = nada pendiente; True/False = el modo quick pendiente.
             cls._instance._pending_quick: Optional[bool] = None
+            # Última extracción completada con éxito (indicador HU0005)
+            cls._instance._last_extraction_ok_at: Optional[str] = None
         return cls._instance
 
     def get_status(self, task_type: TaskType) -> TaskStatus:
         if task_type == TaskType.TRAINING:
             return self._training
         return self._detection
+
+    def extraction_status(self) -> dict:
+        """Estado de la extracción de datos desde Moodle (HU0005).
+
+        - en_vivo: la última corrida terminó bien (o hay una en curso).
+        - sin_conexion: la última corrida falló (Moodle no responde, token
+          inválido...). Se conserva la hora de la última extracción exitosa.
+        """
+        det = self._detection
+        if det.state == TaskState.FAILED:
+            estado = "sin_conexion"
+        elif det.state == TaskState.IDLE and not self._last_extraction_ok_at:
+            estado = "sin_datos"
+        else:
+            estado = "en_vivo"
+        return {
+            "estado": estado,
+            "ultima_extraccion": self._last_extraction_ok_at,
+            "en_curso": det.state == TaskState.RUNNING,
+            "error": det.error if det.state == TaskState.FAILED else None,
+        }
 
     def is_busy(self, task_type: TaskType) -> bool:
         status = self.get_status(task_type)
@@ -307,7 +330,8 @@ class MLTaskManager:
                         "risk_level": result.get("risk_level", "bajo"),
                         "risk_score": result.get("risk_score", 0.0),
                         "confidence": result.get("confidence", 0.0),
-                        "text": entry.get("text", ""),
+                        # Nunca el texto original: solo el anonimizado (HU0033)
+                        "text": result.get("anonymized_text", ""),
                         "source": entry.get("source", ""),
                         "course_name": course_name,
                         "linguistic_markers": result.get(
@@ -570,6 +594,7 @@ class MLTaskManager:
                 f"{counters['students']} estudiantes con mensajes"
             )
             detection_checkpoint.set_state("completed")
+            self._last_extraction_ok_at = self._detection.finished_at
             logger.info(f"Detection completed: {self._detection.result}")
 
             # Notificar al frontend que terminó

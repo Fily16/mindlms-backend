@@ -6,7 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgresql import get_session
 from app.services.user_service import UserService
-from app.core.security import create_access_token, get_current_user
+from app.core.security import (
+    create_access_token,
+    get_current_user,
+    DASHBOARD_ROLES,
+    SIN_PERMISOS,
+)
 from app.schemas.auth import Token
 
 router = APIRouter()
@@ -19,12 +24,15 @@ async def login(
 ):
     svc = UserService(session)
     user = await svc.authenticate(form_data.username, form_data.password)
-    if not user:
+    if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email o contraseña incorrectos",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    # Credenciales válidas pero sin rol de psicólogo/admin: no entra (HU0002-3).
+    if user.role.value not in DASHBOARD_ROLES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=SIN_PERMISOS)
     token = create_access_token({"sub": user.id, "role": user.role.value})
     return Token(access_token=token)
 
@@ -37,7 +45,7 @@ async def get_me(
     """Devuelve los datos del usuario autenticado."""
     svc = UserService(session)
     user = await svc.get_by_id(current_user["user_id"])
-    if not user:
+    if not user or not user.is_active:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     return {
         "id": str(user.id),

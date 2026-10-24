@@ -1,4 +1,5 @@
 import unicodedata
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status, Body
 from typing import Optional, List
@@ -8,6 +9,9 @@ from pydantic import BaseModel
 from app.schemas.analysis import RiskLevel
 from app.db.postgresql import get_session
 from app.services.alert_service import AlertService
+from app.services.nlp.text_processor import TextProcessor
+from app.core.security import get_current_user
+from app.models.alert import AlertStatus
 
 router = APIRouter()
 
@@ -26,6 +30,86 @@ class AlertOut(BaseModel):
     status: str
     created_at: str
     notes: list = []
+    # Fecha del último cambio (estado, validación...) — HU0022
+    updated_at: str | None = None
+    # Validación clínica del nivel calculado por el modelo (HU0026 / HU0027)
+    risk_validated: str | None = None
+    risk_level_adjusted: str | None = None
+    risk_adjust_reason: str | None = None
+    validated_at: str | None = None
+    # Psicólogo que asumió el caso con "Atender este caso" (HU0015)
+    assigned_to: str | None = None
+    # Solo en el detalle: historial de estados y marcadores lingüísticos
+    status_history: list = []
+    linguistic_evidence: dict | None = None
+
+
+_ESTADOS_VALIDOS = {s.value for s in AlertStatus}
+_processor = TextProcessor()
+
+
+def _iso(dt) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+def _evidencia(texto: str) -> dict:
+    """Marcadores lingüísticos del texto de la alerta (HU0025).
+
+    Se recalculan con el mismo TextProcessor del pipeline sobre el texto
+    anonimizado que guarda la alerta: misma regla, sin columnas nuevas.
+    """
+    texto = texto or ""
+    palabras = _processor.extract_matched_words(texto)
+    return {
+        "marcadores": {
+            "pronombres_primera_persona": palabras.get("first_person", []),
+            "negaciones": palabras.get("negations", []),
+            "emociones_negativas": palabras.get("emotions", []),
+            "aislamiento": palabras.get("isolation", []),
+            "desesperanza": palabras.get("hopelessness", []),
+        },
+        "fragmentos_alto_riesgo": _processor.detect_high_risk_fragments(texto),
+    }
+
+
+def _alert_out(a, notes, history=None, detalle: bool = False) -> AlertOut:
+    return AlertOut(
+        id=a.id,
+        student_id=a.student_id,
+        student_name=a.student_name,
+        course_id=a.course_id,
+        course_name=a.course_name,
+        risk_level=a.risk_level.value,
+        risk_score=a.risk_score,
+        confidence=a.confidence,
+        text_fragment=a.text_fragment,
+        source=a.source,
+        status=a.status.value,
+        created_at=a.created_at.isoformat(),
+        notes=[{"author": n.author_name, "content": n.content, "date": n.created_at.isoformat()} for n in notes],
+        updated_at=_iso(a.updated_at),
+        risk_validated=a.risk_validated,
+        risk_level_adjusted=a.risk_level_adjusted.value if a.risk_level_adjusted else None,
+        risk_adjust_reason=a.risk_adjust_reason,
+        validated_at=_iso(a.validated_at),
+        assigned_to=a.assigned_to,
+        status_history=[
+            {
+                "de": h.from_status.value if h.from_status else None,
+                "a": h.to_status.value,
+                "por": h.changed_by_name,
+                "fecha": h.changed_at.isoformat(),
+            }
+            for h in (history or [])
+        ],
+        linguistic_evidence=_evidencia(a.text_fragment) if detalle else None,
+    )
+
+
+async def _nombre_usuario(session: AsyncSession, user: dict) -> str:
+    from app.services.user_service import UserService
+    u = await UserService(session).get_by_id(user.get("user_id", ""))
+    return u.full_name if u else "Psicólogo"
 
 
 class NoteInput(BaseModel):
@@ -51,6 +135,15 @@ class ReportInput(BaseModel):
     contenido: str
     derivacion: str | None = None
     comunicado_al_estudiante: bool = False
+    # Fecha en que se comunicaron los resultados (HU0031). Si se marca
+    # comunicado y no se envía, se usa la fecha actual.
+    fecha_comunicacion: date | None = None
+
+
+class CommunicationInput(BaseModel):
+    """Registro de la comunicación de resultados de un informe (HU0031)."""
+
+    fecha_comunicacion: date | None = None
 
 
 @router.get("/", response_model=List[AlertOut])
@@ -58,7 +151,7 @@ async def get_alerts(
     risk_level: Optional[RiskLevel] = None,
     alert_status: Optional[str] = Query(None, alias="status"),
     student_id: Optional[str] = None,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
 ):
@@ -74,22 +167,25 @@ async def get_alerts(
     result = []
     for a in alerts:
         notes = await service.get_notes(a.id)
-        result.append(AlertOut(
-            id=a.id,
-            student_id=a.student_id,
-            student_name=a.student_name,
-            course_id=a.course_id,
-            course_name=a.course_name,
-            risk_level=a.risk_level.value,
-            risk_score=a.risk_score,
-            confidence=a.confidence,
-            text_fragment=a.text_fragment,
-            source=a.source,
-            status=a.status.value,
-            created_at=a.created_at.isoformat(),
-            notes=[{"author": n.author_name, "content": n.content, "date": n.created_at.isoformat()} for n in notes],
-        ))
+        result.append(_alert_out(a, notes))
     return result
+
+
+@router.get("/counts")
+async def get_alert_counts(
+    risk_level: Optional[RiskLevel] = None,
+    alert_status: Optional[str] = Query(None, alias="status"),
+    student_id: Optional[str] = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Cantidad de alertas por nivel y por estado para los filtros (HU0020)."""
+    if alert_status and alert_status not in _ESTADOS_VALIDOS:
+        raise HTTPException(status_code=422, detail="Estado de alerta no válido")
+    return await AlertService(session).get_counts(
+        risk_level=risk_level.value if risk_level else None,
+        status=alert_status,
+        student_id=student_id,
+    )
 
 
 @router.get("/statistics")
@@ -112,21 +208,8 @@ async def get_alert_detail(
     if not alert:
         raise HTTPException(status_code=404, detail="Alerta no encontrada")
     notes = await service.get_notes(alert_id)
-    return AlertOut(
-        id=alert.id,
-        student_id=alert.student_id,
-        student_name=alert.student_name,
-        course_id=alert.course_id,
-        course_name=alert.course_name,
-        risk_level=alert.risk_level.value,
-        risk_score=alert.risk_score,
-        confidence=alert.confidence,
-        text_fragment=alert.text_fragment,
-        source=alert.source,
-        status=alert.status.value,
-        created_at=alert.created_at.isoformat(),
-        notes=[{"author": n.author_name, "content": n.content, "date": n.created_at.isoformat()} for n in notes],
-    )
+    history = await service.get_status_history(alert_id)
+    return _alert_out(alert, notes, history, detalle=True)
 
 
 @router.patch("/{alert_id}/status")
@@ -134,13 +217,28 @@ async def update_alert_status(
     alert_id: str,
     new_status: str = Query(..., description="pendiente, revisada, en_seguimiento, resuelta"),
     session: AsyncSession = Depends(get_session),
+    user: dict = Depends(get_current_user),
 ):
-    """Actualiza el estado de una alerta."""
+    """Actualiza el estado de una alerta y registra la fecha del cambio (HU0022)."""
+    if new_status not in _ESTADOS_VALIDOS:
+        raise HTTPException(
+            status_code=422,
+            detail="Estado no válido: use pendiente, revisada, en_seguimiento o resuelta",
+        )
     service = AlertService(session)
-    alert = await service.update_status(alert_id, new_status)
+    alert = await service.update_status(
+        alert_id, new_status,
+        changed_by=user.get("user_id"),
+        changed_by_name=await _nombre_usuario(session, user),
+    )
     if not alert:
         raise HTTPException(status_code=404, detail="Alerta no encontrada")
-    return {"id": alert.id, "status": alert.status.value, "updated": True}
+    return {
+        "id": alert.id,
+        "status": alert.status.value,
+        "updated": True,
+        "updated_at": _iso(alert.updated_at),
+    }
 
 
 @router.post("/{alert_id}/notes")
@@ -148,8 +246,12 @@ async def add_note_to_alert(
     alert_id: str,
     note_input: NoteInput,
     session: AsyncSession = Depends(get_session),
+    user: dict = Depends(get_current_user),
 ):
-    """Agrega una nota del psicólogo a una alerta."""
+    """Agrega una nota del psicólogo a una alerta (HU0023)."""
+    contenido = (note_input.content or "").strip()
+    if not contenido:
+        raise HTTPException(status_code=422, detail="El contenido de la nota es obligatorio")
     service = AlertService(session)
     alert = await service.get_alert_by_id(alert_id)
     if not alert:
@@ -157,9 +259,9 @@ async def add_note_to_alert(
 
     note = await service.add_note(
         alert_id=alert_id,
-        author_id="system",
-        author_name="Psicólogo",
-        content=note_input.content,
+        author_id=user.get("user_id") or "system",
+        author_name=await _nombre_usuario(session, user),
+        content=contenido,
     )
     return {"id": note.id, "alert_id": alert_id, "created": True}
 
@@ -273,6 +375,7 @@ async def validate_alert_risk(
     alert_id: str,
     payload: RiskValidationInput,
     session: AsyncSession = Depends(get_session),
+    user: dict = Depends(get_current_user),
 ):
     """Registra si el psicólogo confirma o corrige el nivel que calculó el modelo.
 
@@ -280,13 +383,17 @@ async def validate_alert_risk(
     corrección va aparte, de modo que después se pueda medir cuántas veces
     el criterio clínico coincidió con el automático.
     """
+    if payload.decision not in ("confirmado", "ajustado"):
+        raise HTTPException(status_code=422, detail="decision debe ser 'confirmado' o 'ajustado'")
+    if payload.nivel_ajustado and payload.nivel_ajustado not in ("bajo", "medio", "alto"):
+        raise HTTPException(status_code=422, detail="nivel_ajustado debe ser bajo, medio o alto")
     service = AlertService(session)
     alert = await service.validate_risk(
         alert_id=alert_id,
         decision=payload.decision,
         nivel_ajustado=payload.nivel_ajustado,
         motivo=payload.motivo,
-        autor="psicologo",
+        autor=await _nombre_usuario(session, user),
     )
     if alert is None:
         raise HTTPException(status_code=404, detail="Alerta no encontrada")
@@ -305,6 +412,8 @@ async def validate_alert_risk(
             else alert.risk_level.value
         ),
         "motivo": alert.risk_adjust_reason,
+        "validado_por": alert.validated_by,
+        "validado_en": _iso(alert.validated_at),
     }
 
 
@@ -313,23 +422,70 @@ async def create_evaluation_report(
     alert_id: str,
     payload: ReportInput,
     session: AsyncSession = Depends(get_session),
+    user: dict = Depends(get_current_user),
 ):
-    """Registra el informe de evaluación psicológica en el expediente."""
+    """Registra el informe de evaluación en el expediente (HU0028–HU0031).
+
+    El informe incluye automáticamente la evidencia lingüística de la alerta
+    (nivel, score, fragmento anonimizado y marcadores detectados).
+    """
+    contenido = (payload.contenido or "").strip()
+    if not contenido:
+        raise HTTPException(status_code=422, detail="El contenido del informe es obligatorio")
     service = AlertService(session)
+    alert = await service.get_alert_by_id(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alerta no encontrada")
+
+    ev = _evidencia(alert.text_fragment)
+    marcadores = "; ".join(
+        f"{k.replace('_', ' ')}: {', '.join(v)}" for k, v in ev["marcadores"].items() if v
+    ) or "sin marcadores detectados"
+    evidencia = (
+        "\n\n— Evidencia lingüística generada por MindLMS —\n"
+        f"Nivel de riesgo (modelo): {alert.risk_level.value} · score {alert.risk_score:.2f}\n"
+        f"Fragmento: \"{alert.text_fragment[:300]}\"\n"
+        f"Marcadores: {marcadores}"
+    )
+    fecha = (
+        datetime.combine(payload.fecha_comunicacion, datetime.min.time())
+        if payload.fecha_comunicacion else None
+    )
     report = await service.create_report(
         alert_id=alert_id,
-        contenido=payload.contenido,
+        contenido=contenido + evidencia,
         derivacion=payload.derivacion,
         comunicado=payload.comunicado_al_estudiante,
-        autor_id="psicologo",
-        autor_nombre="Psicólogo institucional",
+        autor_id=user.get("user_id") or "psicologo",
+        autor_nombre=await _nombre_usuario(session, user),
+        fecha_comunicacion=fecha,
     )
-    if not report:
-        raise HTTPException(status_code=404, detail="Alerta no encontrada")
     return {
         "id": report.id,
         "student_id": report.student_id,
         "creado": report.created_at.isoformat(),
         "derivacion": bool(report.referral),
         "comunicado": report.communicated_at is not None,
+        "fecha_comunicacion": _iso(report.communicated_at),
+    }
+
+
+@router.patch("/reports/{report_id}/communication")
+async def register_report_communication(
+    report_id: str,
+    payload: CommunicationInput,
+    session: AsyncSession = Depends(get_session),
+):
+    """Registra que se comunicaron al estudiante los resultados y el plan de
+    seguimiento de un informe ya guardado (HU0031). La fecha es obligatoria."""
+    if payload.fecha_comunicacion is None:
+        raise HTTPException(status_code=422, detail="La fecha de la comunicación es obligatoria")
+    fecha = datetime.combine(payload.fecha_comunicacion, datetime.min.time())
+    report = await AlertService(session).register_communication(report_id, fecha)
+    if not report:
+        raise HTTPException(status_code=404, detail="Informe no encontrado")
+    return {
+        "id": report.id,
+        "comunicado": True,
+        "fecha_comunicacion": _iso(report.communicated_at),
     }

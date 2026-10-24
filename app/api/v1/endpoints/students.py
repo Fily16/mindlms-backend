@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from app.core.security import get_current_user
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,7 +82,28 @@ async def get_student_reports(
             "contenido": r.content,
             "derivacion": r.referral,
             "comunicado": r.communicated_at is not None,
+            "fecha_comunicacion": r.communicated_at.isoformat() if r.communicated_at else None,
             "fecha": r.created_at.isoformat(),
         }
         for r in reports
     ]
+
+
+@router.post("/{student_id}/attend")
+async def attend_student_case(
+    student_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: dict = Depends(get_current_user),
+):
+    """'Atender este caso' (HU0015).
+
+    El psicólogo autenticado asume el caso: las alertas abiertas del
+    estudiante pasan a 'en_seguimiento' y quedan asignadas a su nombre.
+    """
+    from app.services.user_service import UserService
+
+    u = await UserService(session).get_by_id(user.get("user_id", ""))
+    nombre = u.full_name if u else "Psicólogo"
+    return await AlertService(session).attend_student(
+        student_id, user.get("user_id"), nombre
+    )

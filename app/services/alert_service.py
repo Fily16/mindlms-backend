@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy import select, func, desc, case, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.alert import Alert, AlertNote, AlertStatus, RiskLevelDB
+from app.models.alert import Alert, AlertNote, AlertStatus, AlertStatusChange, RiskLevelDB
 from app.db.collections import get_student_profiles_collection
 
 
@@ -75,15 +75,117 @@ class AlertService:
         result = await self.session.execute(select(Alert).where(Alert.id == alert_id))
         return result.scalar_one_or_none()
 
-    async def update_status(self, alert_id: str, new_status: str) -> Alert | None:
+    async def update_status(
+        self,
+        alert_id: str,
+        new_status: str,
+        changed_by: str | None = None,
+        changed_by_name: str | None = None,
+    ) -> Alert | None:
+        """Cambia el estado y deja constancia de quién y cuándo (HU0022)."""
         alert = await self.get_alert_by_id(alert_id)
         if not alert:
             return None
-        alert.status = AlertStatus(new_status)
-        alert.updated_at = _utcnow_naive()
+        nuevo = AlertStatus(new_status)
+        anterior = alert.status
+        now = _utcnow_naive()
+        alert.status = nuevo
+        alert.updated_at = now
+        if anterior != nuevo:
+            self.session.add(AlertStatusChange(
+                id=str(uuid.uuid4()),
+                alert_id=alert.id,
+                from_status=anterior,
+                to_status=nuevo,
+                changed_by=changed_by,
+                changed_by_name=changed_by_name,
+                changed_at=now,
+            ))
         await self.session.commit()
         await self.session.refresh(alert)
         return alert
+
+    async def get_status_history(self, alert_id: str) -> list[AlertStatusChange]:
+        result = await self.session.execute(
+            select(AlertStatusChange)
+            .where(AlertStatusChange.alert_id == alert_id)
+            .order_by(AlertStatusChange.changed_at)
+        )
+        return list(result.scalars().all())
+
+    async def get_counts(
+        self,
+        risk_level: Optional[str] = None,
+        status: Optional[str] = None,
+        student_id: Optional[str] = None,
+    ) -> dict:
+        """Conteos para los filtros del Centro de Alertas (HU0020).
+
+        Se cuentan en la base, no sobre la página de 50 que trae el listado.
+        Cada contador respeta los OTROS filtros activos: el de nivel cuenta
+        dentro del estado elegido y viceversa.
+        """
+        def _base(q):
+            if student_id:
+                q = q.where(Alert.student_id == student_id)
+            return q
+
+        q_nivel = _base(select(Alert.risk_level, func.count(Alert.id)).group_by(Alert.risk_level))
+        if status:
+            q_nivel = q_nivel.where(Alert.status == AlertStatus(status))
+        q_estado = _base(select(Alert.status, func.count(Alert.id)).group_by(Alert.status))
+        if risk_level:
+            q_estado = q_estado.where(Alert.risk_level == RiskLevelDB(risk_level))
+
+        por_nivel = {lvl.value: 0 for lvl in RiskLevelDB}
+        for lvl, n in (await self.session.execute(q_nivel)).all():
+            por_nivel[lvl.value] = n
+        por_estado = {st.value: 0 for st in AlertStatus}
+        for st, n in (await self.session.execute(q_estado)).all():
+            por_estado[st.value] = n
+
+        return {
+            "por_nivel": por_nivel,
+            "por_estado": por_estado,
+            "total_nivel": sum(por_nivel.values()),
+            "total_estado": sum(por_estado.values()),
+        }
+
+    async def attend_student(self, student_id: str, user_id: str, user_name: str) -> dict:
+        """'Atender este caso' (HU0015): el psicólogo asume el caso.
+
+        Las alertas aún abiertas del estudiante (pendiente o revisada) pasan a
+        'en_seguimiento', quedan asignadas al psicólogo y el cambio se registra
+        en el historial de estados.
+        """
+        result = await self.session.execute(
+            select(Alert).where(
+                Alert.student_id == student_id,
+                Alert.status.in_([AlertStatus.PENDING, AlertStatus.REVIEWED]),
+            )
+        )
+        abiertas = list(result.scalars().all())
+        now = _utcnow_naive()
+        for alert in abiertas:
+            self.session.add(AlertStatusChange(
+                id=str(uuid.uuid4()),
+                alert_id=alert.id,
+                from_status=alert.status,
+                to_status=AlertStatus.FOLLOWING,
+                changed_by=user_id,
+                changed_by_name=user_name,
+                changed_at=now,
+            ))
+            alert.status = AlertStatus.FOLLOWING
+            alert.assigned_to = user_id
+            alert.updated_at = now
+        await self.session.commit()
+        return {
+            "student_id": student_id,
+            "alertas_en_seguimiento": len(abiertas),
+            "asignado_a": user_name,
+            "fecha": now.isoformat(),
+        }
 
     async def validate_risk(
         self,
@@ -128,6 +230,7 @@ class AlertService:
         comunicado: bool,
         autor_id: str,
         autor_nombre: str,
+        fecha_comunicacion: datetime | None = None,
     ):
         """Registra un informe de evaluación en el expediente del estudiante."""
         from app.models.alert import EvaluationReport
@@ -145,10 +248,25 @@ class AlertService:
             author_name=autor_nombre,
             content=contenido.strip(),
             referral=(derivacion or "").strip() or None,
-            communicated_at=_utcnow_naive() if comunicado else None,
+            communicated_at=(fecha_comunicacion or _utcnow_naive()) if comunicado else None,
             created_at=_utcnow_naive(),
         )
         self.session.add(report)
+        await self.session.commit()
+        await self.session.refresh(report)
+        return report
+
+    async def register_communication(self, report_id: str, fecha: datetime):
+        """Marca que los resultados del informe se comunicaron al estudiante (HU0031)."""
+        from app.models.alert import EvaluationReport
+
+        result = await self.session.execute(
+            select(EvaluationReport).where(EvaluationReport.id == report_id)
+        )
+        report = result.scalar_one_or_none()
+        if not report:
+            return None
+        report.communicated_at = fecha
         await self.session.commit()
         await self.session.refresh(report)
         return report
