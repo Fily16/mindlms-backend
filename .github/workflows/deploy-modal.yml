@@ -1,0 +1,39 @@
+# Despliega el backend en Modal y restablece el usuario psicólogo, todo desde
+# GitHub (sin laptop). Requiere tres secretos del repositorio
+# (Settings > Secrets and variables > Actions):
+#   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET  -> modal.com > Settings > API Tokens
+#   PSYCHOLOGIST_PASSWORD               -> la contraseña nueva del panel
+# Se ejecuta al subir cambios a esta rama; para repetirlo: pestaña Actions >
+# la ejecución > "Re-run all jobs".
+name: Desplegar backend en Modal
+
+on:
+  push:
+    branches: [claude/clever-thompson-v1917o]
+  workflow_dispatch:
+
+jobs:
+  desplegar:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      PSYCHOLOGIST_PASSWORD: ${{ secrets.PSYCHOLOGIST_PASSWORD }}
+    steps:
+      - name: Revisar secretos
+        run: |
+          for s in MODAL_TOKEN_ID MODAL_TOKEN_SECRET PSYCHOLOGIST_PASSWORD; do
+            if [ -z "${!s}" ]; then
+              echo "::error::Falta el secreto $s en Settings > Secrets and variables > Actions"
+              exit 1
+            fi
+          done
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install modal==1.6.3
+      - name: Desplegar backend
+        run: modal deploy modal_app.py
+      - name: Restablecer usuario psicólogo
+        run: modal run modal_app.py::restablecer_psicologo --password "$PSYCHOLOGIST_PASSWORD"
