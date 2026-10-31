@@ -71,6 +71,13 @@ sudo netfilter-persistent save
 PSYCHOLOGIST_PASSWORD='<una contraseña fuerte>' .venv/bin/python scripts/create_psychologist.py
 ```
 
+Si el login responde "Email o contraseña incorrectos" y el usuario ya existe
+(el script no cambia la contraseña de un usuario existente), restablecerla:
+
+```bash
+PSYCHOLOGIST_PASSWORD='<una contraseña fuerte>' .venv/bin/python scripts/create_psychologist.py --reset-password
+```
+
 ## 7. Comprobar que RoBERTa cargó de verdad
 
 El clasificador degrada en silencio a Random Forest o a reglas si el modelo
