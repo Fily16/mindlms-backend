@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgresql import get_session
@@ -16,6 +17,8 @@ from app.schemas.auth import Token
 
 router = APIRouter()
 
+BD_NO_DISPONIBLE = "No se pudo conectar con la base de datos. Intenta de nuevo en unos minutos."
+
 
 @router.post("/login", response_model=Token)
 async def login(
@@ -23,7 +26,16 @@ async def login(
     session: AsyncSession = Depends(get_session),
 ):
     svc = UserService(session)
-    user = await svc.authenticate(form_data.username, form_data.password)
+    try:
+        user = await svc.authenticate(form_data.username, form_data.password)
+    except Exception as e:
+        # Sin esto, una base caída (p. ej. Aiven apagada) daba 500 y el panel lo
+        # mostraba como "Usuario o contraseña incorrectos".
+        logger.error(f"Login: no se pudo consultar la base de usuarios: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=BD_NO_DISPONIBLE,
+        )
     if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

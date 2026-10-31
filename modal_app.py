@@ -123,6 +123,68 @@ def fastapi_app():
 
 
 # ---------------------------------------------------------------------------
+# Acceso al panel: crea o restablece el usuario psicólogo en la base REAL.
+#
+# Corre dentro de Modal con los mismos secretos que el backend, así que no
+# hace falta tener la URL de Aiven en la máquina local:
+#
+#     modal run modal_app.py::restablecer_psicologo --password 'NuevaClave2026!'
+#
+# Si el usuario no existe lo crea; si existe le fija la contraseña, lo
+# reactiva y le asegura el rol psicologo. Imprime un diagnóstico de la base
+# (si responde y qué usuarios del panel hay) para ver por qué fallaba el login.
+# ---------------------------------------------------------------------------
+@app.function(
+    image=image,
+    secrets=[
+        modal.Secret.from_name("mindlms"),
+        modal.Secret.from_name("mindlms-database-recovery"),
+    ],
+    timeout=120,
+)
+async def restablecer_psicologo(
+    password: str,
+    email: str = "psicologo@mindlms.test",
+    nombre: str = "Dra. Carmen Vega",
+):
+    import os
+    import sys
+
+    os.environ["POSTGRES_URL"] = os.environ["MINDLMS_POSTGRES_URL"]
+    sys.path.insert(0, "/root")
+
+    from sqlalchemy import select
+
+    from app.db.postgresql import async_session, init_db
+    from app.models.user import User, UserRole
+    from app.services.user_service import UserService, normalizar_email
+
+    if len(password) < 8:
+        raise SystemExit("La contraseña debe tener al menos 8 caracteres.")
+
+    await init_db()
+    async with async_session() as session:
+        usuarios = (await session.execute(select(User))).scalars().all()
+        print(f"Base conectada. Usuarios registrados: {len(usuarios)}")
+        for u in usuarios:
+            print(f"  - {u.email}  rol={u.role.value}  activo={u.is_active}")
+
+        svc = UserService(session)
+        user = await svc.get_by_email(email)
+        if user is None:
+            user = await svc.create_user(email, password, nombre, "psicologo")
+            print(f"Usuario CREADO: {user.email}")
+        else:
+            user.role = UserRole.PSYCHOLOGIST
+            user.is_active = True
+            await svc.set_password(user, password)
+            print(f"Contraseña RESTABLECIDA: {user.email}")
+
+        ok = await svc.authenticate(normalizar_email(email), password)
+        print("Prueba de login:", "OK" if ok else "FALLÓ")
+
+
+# ---------------------------------------------------------------------------
 # Robot que mantiene activa la base de datos de Aiven.
 #
 # El plan gratuito de Aiven apaga el servicio tras un periodo de inactividad

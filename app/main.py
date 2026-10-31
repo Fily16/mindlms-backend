@@ -221,4 +221,35 @@ async def health_check():
         "status": "ok",
         "version": "0.1.0",
         "cache": "connected" if cache.is_available else "disconnected",
+        **(await _estado_postgres()),
     }
+
+
+async def _estado_postgres() -> dict:
+    """Diagnóstico del login: ¿responde PostgreSQL y hay quién pueda entrar al panel?
+
+    Si "usuarios_panel" es 0, el login siempre responde "incorrecto": la base
+    no tiene ningún psicólogo/admin activo (p. ej. una base recién recuperada).
+    Solo expone un conteo, nunca emails.
+    """
+    from sqlalchemy import func, select
+    from app.core.security import DASHBOARD_ROLES
+    from app.db.postgresql import async_session
+    from app.models.user import User, UserRole
+
+    async def _contar() -> int:
+        async with async_session() as session:
+            return await session.scalar(
+                select(func.count()).select_from(User).where(
+                    User.is_active.is_(True),
+                    User.role.in_([UserRole(r) for r in DASHBOARD_ROLES]),
+                )
+            )
+
+    try:
+        # Tope corto: con la base caída asyncpg puede esperar ~60 s por conexión.
+        n = await asyncio.wait_for(_contar(), timeout=5)
+        return {"postgres": "connected", "usuarios_panel": int(n or 0)}
+    except Exception as e:
+        logger.warning(f"/health: PostgreSQL no responde: {e}")
+        return {"postgres": "disconnected", "usuarios_panel": None}

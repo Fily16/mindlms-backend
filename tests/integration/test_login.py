@@ -106,3 +106,37 @@ async def test_set_password_permite_entrar_con_la_nueva(cliente):
         await svc.set_password(user, "OtraClave2026!")
     assert (await _login(cliente, "psicologo@mindlms.test")).status_code == 401
     assert (await _login(cliente, "psicologo@mindlms.test", "OtraClave2026!")).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_base_caida_da_503_y_no_credenciales_incorrectas(cliente, monkeypatch):
+    async def caida(self, email, password):
+        raise ConnectionRefusedError("Aiven apagada")
+
+    monkeypatch.setattr(UserService, "authenticate", caida)
+    r = await _login(cliente, "psicologo@mindlms.test")
+    assert r.status_code == 503
+    assert "base de datos" in r.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_health_informa_base_y_usuarios_del_panel(cliente, monkeypatch):
+    from app import main
+    from app.db import postgresql
+
+    monkeypatch.setattr(postgresql, "async_session", cliente.maker)
+    estado = await main._estado_postgres()
+    # psicologo + admin legado, ambos activos.
+    assert estado == {"postgres": "connected", "usuarios_panel": 2}
+
+
+@pytest.mark.anyio
+async def test_health_con_base_caida(monkeypatch):
+    from app import main
+    from app.db import postgresql
+
+    def caida():
+        raise ConnectionRefusedError("Aiven apagada")
+
+    monkeypatch.setattr(postgresql, "async_session", caida)
+    assert await main._estado_postgres() == {"postgres": "disconnected", "usuarios_panel": None}

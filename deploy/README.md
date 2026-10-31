@@ -78,6 +78,17 @@ Si el login responde "Email o contraseña incorrectos" y el usuario ya existe
 PSYCHOLOGIST_PASSWORD='<una contraseña fuerte>' .venv/bin/python scripts/create_psychologist.py --reset-password
 ```
 
+En el despliegue de Modal se hace sin tener la URL de Aiven en local, con los
+mismos secretos del backend:
+
+```bash
+modal run modal_app.py::restablecer_psicologo --password '<una contraseña fuerte>'
+```
+
+Para diagnosticar el login, abrir `/health`: `postgres` dice si la base
+responde y `usuarios_panel` cuántos psicólogos/admin activos hay (con 0, el
+login siempre responde "incorrecto").
+
 ## 7. Comprobar que RoBERTa cargó de verdad
 
 El clasificador degrada en silencio a Random Forest o a reglas si el modelo
