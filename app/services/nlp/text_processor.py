@@ -88,6 +88,73 @@ HIGH_RISK_PATTERNS = [
     r"todo\s+sería\s+mejor\s+sin\s+mí",
 ]
 
+# === Anonimización de nombres (HU0033) ===
+# Regla propia para quien se presenta en el texto ("soy Juan Pérez"): debe
+# funcionar aunque spaCy no esté disponible en el ambiente desplegado.
+_NAME_INTRO_RE = re.compile(r"\b(me\s+llamo|mi\s+nombre\s+es|soy)\s+", re.IGNORECASE)
+_NAME_TOKEN_RE = re.compile(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:['-][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)?")
+_NAME_PARTICLES = {"de", "del", "la", "las", "los"}
+_MAX_NAME_TOKENS = 4
+
+# Nombres frecuentes: permiten reconocer un nombre escrito en minúsculas
+# ("soy juan perez") sin confundirlo con "soy muy malo".
+_COMMON_FIRST_NAMES = {
+    "adriana", "alberto", "alejandra", "alejandro", "alex", "alicia", "andrea", "andres",
+    "andrés", "angel", "ángel", "angela", "ángela", "ana", "antonio", "arturo", "beatriz",
+    "camila", "carla", "carlos", "carmen", "cesar", "césar", "claudia", "cristian",
+    "cristina", "daniel", "daniela", "david", "diana", "diego", "eduardo", "elena",
+    "enrique", "esteban", "fernanda", "fernando", "francisco", "gabriel", "gabriela",
+    "hector", "héctor", "hugo", "ivan", "iván", "jaime", "javier", "jesus", "jesús",
+    "jorge", "jose", "josé", "juan", "julia", "julio", "karina", "laura", "lucia", "lucía",
+    "luis", "manuel", "marco", "marcela", "maria", "maría", "mariana", "mario", "marta",
+    "martin", "martín", "miguel", "monica", "mónica", "natalia", "nicolas", "nicolás",
+    "oscar", "óscar", "pablo", "patricia", "paola", "pedro", "rafael", "raul", "raúl",
+    "ricardo", "roberto", "rocio", "rocío", "rodrigo", "rosa", "sandra", "santiago",
+    "sara", "sebastian", "sebastián", "sergio", "sofia", "sofía", "susana", "valeria",
+    "veronica", "verónica", "victor", "víctor",
+}
+
+# Palabras que nunca forman parte de un nombre presentado.
+_NOT_A_NAME = {
+    # Conectores y palabras frecuentes
+    "a", "al", "algo", "alguien", "aqui", "aquí", "asi", "así", "ayer", "bien", "como", "cómo",
+    "con", "de", "del", "e", "el", "en", "esta", "está", "este", "esto", "hoy", "la", "las",
+    "le", "lo", "los", "mal", "mas", "más", "mañana", "me", "mi", "mis", "mucho", "mucha",
+    "muy", "nada", "ni", "no", "nunca", "o", "para", "pero", "por", "porque", "que", "qué",
+    "se", "si", "sí", "siempre", "sin", "solo", "sola", "su", "tan", "tambien", "también",
+    "tarde", "temprano", "todo", "toda", "todos", "tu", "un", "una", "uno", "y", "ya", "yo",
+    # Verbos habituales tras presentarse
+    "curso", "estoy", "estudio", "he", "necesito", "puedo", "quiero", "siento", "soy",
+    "tengo", "trabajo", "vengo", "vivo",
+    # Ocupaciones y adjetivos habituales tras "soy"
+    "alumna", "alumno", "alumnos", "amiga", "amigo", "buen", "buena", "bueno", "compañera",
+    "compañero", "delegada", "delegado", "docente", "estudiante", "estudiantes", "ingeniera",
+    "ingeniero", "mala", "malo", "nueva", "nuevo", "persona", "peor", "profesor", "profesora",
+    "responsable", "tutor", "tutora",
+}
+
+# Entidades que spaCy confunde con personas o lugares en textos de curso.
+_NER_FALSE_POSITIVES = {"hola", "ref", "soy", "foro", "curso", "tarea", "examen", "examenes", "exámenes"}
+_NER_COURSE_WORDS = {
+    "algoritmos", "avanzada", "calculo", "cálculo", "diferencial", "fisica", "física",
+    "ingles", "inglés", "matematica", "matemática", "programacion", "programación",
+}
+
+
+def _is_capitalized(token: str) -> bool:
+    """Inicial mayúscula, sin ser un texto gritado en mayúsculas ("SOY PESIMO")."""
+    return token[0].isupper() and not (len(token) > 1 and token.isupper())
+
+
+def _is_ner_false_positive(entity: str) -> bool:
+    """True si la entidad de spaCy es un saludo, una referencia o un curso, no un dato personal."""
+    if "[" in entity or "]" in entity:
+        return True
+    words = [w.strip(".,;:!?¿¡").lower() for w in entity.split()]
+    if not words or " ".join(words) in _NER_FALSE_POSITIVES:
+        return True
+    return any(w in _NER_COURSE_WORDS or w in _NER_FALSE_POSITIVES for w in words)
+
 
 class TextProcessor:
     """Procesador de texto completo con spaCy y extracción de marcadores."""
@@ -122,16 +189,75 @@ class TextProcessor:
         text = re.sub(r"\S+@\S+\.\S+", "[EMAIL]", text)
         # Teléfonos
         text = re.sub(r"\b\d{9,}\b", "[TELEFONO]", text)
+        # Nombres de quien se presenta en el texto (no depende de spaCy)
+        text = self._mask_introduced_names(text)
 
         # NER con spaCy para nombres y locaciones
         if SPACY_AVAILABLE:
             doc = nlp(text)
             for ent in reversed(doc.ents):
+                if _is_ner_false_positive(ent.text):
+                    continue
                 if ent.label_ == "PER":
                     text = text[:ent.start_char] + "[NOMBRE]" + text[ent.end_char:]
                 elif ent.label_ == "LOC":
                     text = text[:ent.start_char] + "[LUGAR]" + text[ent.end_char:]
         return text
+
+    def _mask_introduced_names(self, text: str) -> str:
+        """Reemplaza por [NOMBRE] el nombre tras "soy", "me llamo" o "mi nombre es"."""
+        result = []
+        last = 0
+        for intro in _NAME_INTRO_RE.finditer(text):
+            if intro.start() < last:
+                continue
+            end = self._introduced_name_end(text, intro)
+            if end is None:
+                continue
+            result.append(text[last:intro.end()])
+            result.append("[NOMBRE]")
+            last = end
+        result.append(text[last:])
+        return "".join(result)
+
+    def _introduced_name_end(self, text: str, intro: re.Match) -> int | None:
+        """Devuelve dónde termina el nombre presentado, o None si lo que sigue no es un nombre."""
+        pos = intro.end()
+        first = _NAME_TOKEN_RE.match(text, pos)
+        if not first or first.group().lower() in _NOT_A_NAME:
+            return None
+
+        explicit = "nombre" in intro.group().lower()
+        capitalized = _is_capitalized(first.group())
+        if not (explicit or capitalized or first.group().lower() in _COMMON_FIRST_NAMES):
+            return None
+
+        end = first.end()
+        count = 1
+        while count < _MAX_NAME_TOKENS:
+            gap = re.match(r"\s+", text[end:])
+            if not gap:
+                break
+            token = _NAME_TOKEN_RE.match(text, end + gap.end())
+            if not token:
+                break
+            word = token.group()
+            lower = word.lower()
+            if lower in _NAME_PARTICLES:
+                # "de la Cruz": la partícula solo cuenta si sigue un apellido en mayúscula
+                after = re.match(
+                    r"(?:\s+(?:de|del|la|las|los))*\s+([A-ZÁÉÍÓÚÜÑ])", text[token.end():], re.IGNORECASE
+                )
+                if capitalized and after and after.group(1).isupper():
+                    end = token.end()
+                    count += 1
+                    continue
+                break
+            if lower in _NOT_A_NAME or (capitalized and not _is_capitalized(word)):
+                break
+            end = token.end()
+            count += 1
+        return end
 
     def tokenize(self, text: str) -> List[str]:
         """Tokeniza texto con spaCy, removiendo stopwords y puntuación."""

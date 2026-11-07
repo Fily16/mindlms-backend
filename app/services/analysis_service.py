@@ -61,6 +61,8 @@ class AnalysisService:
 
         # 4. Clasificar con modelo ML
         prediction = await self.classifier.predict(cleaned)
+        # Los fragmentos salen hacia el panel y se guardan: sin datos personales.
+        prediction["flagged_fragments"] = self.processor.detect_high_risk_fragments(anonymized)
 
         # 5. Guardar resultado en MongoDB
         now = datetime.now(timezone.utc).isoformat()
