@@ -12,9 +12,19 @@ try:
     import spacy
     nlp = spacy.load("es_core_news_sm")
     SPACY_AVAILABLE = True
-except (ImportError, OSError):
+except Exception as e:
+    # Cualquier fallo cargando el modelo deja el sistema en el fallback por regex,
+    # nunca tumba el arranque. En el contenedor de Modal, es_core_news_sm lanza
+    # OverflowError("Python int too large to convert to C ssize_t") al deserializar
+    # el tokenizador: antes ese error no estaba contemplado aquí y el proceso moría
+    # al importar este módulo, con lo que toda la API quedaba caída.
     SPACY_AVAILABLE = False
-    logger.warning("spaCy no disponible. Usando fallback para análisis lingüístico.")
+    logger.warning(
+        f"spaCy no disponible ({type(e).__name__}: {e}). "
+        "Usando fallback para análisis lingüístico. La anonimización sigue "
+        "activa por regex: correos, DNI, teléfonos y el nombre de quien se "
+        "presenta en el texto (HU0033)."
+    )
 
 from app.schemas.analysis import LinguisticMarkers
 
