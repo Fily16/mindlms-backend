@@ -109,16 +109,34 @@ class MoodleClient:
 
     # === Chat ===
 
-    async def get_chat_sessions(self, chat_id: int) -> dict:
-        """Obtiene sesiones de un chat."""
-        return await self._call("mod_chat_get_sessions", chatid=chat_id)
+    async def get_chat_sessions(self, chat_id: int, show_all: bool = True) -> dict:
+        """Obtiene sesiones de un chat.
 
-    async def get_chat_messages(self, chat_id: int, session_start: int = 0) -> dict:
-        """Obtiene mensajes de una sesión de chat."""
+        showall=1 es necesario: por omisión Moodle solo devuelve las sesiones
+        "completas", es decir las que duran más de 60 s y tienen más de un
+        usuario escribiendo (mod/chat/lib.php, chat_get_sessions). Un único
+        estudiante dejando un mensaje no produce ninguna sesión completa, y
+        sin este parámetro su mensaje nunca se extraería.
+        """
+        return await self._call(
+            "mod_chat_get_sessions",
+            chatid=chat_id,
+            showall=1 if show_all else 0,
+        )
+
+    async def get_chat_messages(
+        self, chat_id: int, session_start: int = 0, session_end: int = 0
+    ) -> dict:
+        """Obtiene mensajes de una sesión de chat.
+
+        sessionend es obligatorio en Moodle 4.5: sin él la llamada responde
+        invalid_parameter_exception y no devuelve ningún mensaje.
+        """
         return await self._call(
             "mod_chat_get_session_messages",
             chatid=chat_id,
             sessionstart=session_start,
+            sessionend=session_end,
         )
 
     # === Tareas (Assignments) ===

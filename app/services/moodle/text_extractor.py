@@ -106,8 +106,15 @@ class MoodleTextExtractor:
                         # Saltar sesiones cerradas antes del último scan
                         if since_ts and session_end and session_end <= since_ts:
                             continue
+                        # Una sesión en curso puede no traer sessionend: en ese
+                        # caso se consulta hasta ahora, para no dejar fuera el
+                        # mensaje que el estudiante acaba de escribir.
+                        fin_consulta = int(
+                            session.get("sessionend")
+                            or datetime.now(timezone.utc).timestamp()
+                        )
                         messages = await self.client.get_chat_messages(
-                            chat_id, session.get("sessionstart", 0)
+                            chat_id, session.get("sessionstart", 0), fin_consulta
                         )
                         # Agrupar mensajes consecutivos del mismo usuario
                         grouped = self._group_consecutive_messages(
